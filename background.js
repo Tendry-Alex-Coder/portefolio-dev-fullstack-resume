@@ -14,6 +14,10 @@
     let particles = [];
     let rgb = [31, 95, 91]; // fallback = --accent
     let mouse = { x: -9999, y: -9999, active: false };
+    // "Lumière" au curseur : baseX/baseY suit la souris (avec retard),
+    // x/y = position réellement affichée = base + décalage vers les
+    // particules proches, intensity = apparition/disparition en fondu.
+    let light = { baseX: -9999, baseY: -9999, x: -9999, y: -9999, intensity: 0 };
 
     const LINK_DIST = 130;   // distance max pour relier deux particules
     const MOUSE_DIST = 170;  // rayon d'influence du curseur
@@ -60,9 +64,69 @@
 
     p.draw = () => {
       p.clear();
-      const [r, g, b] = rgb;
+      const r = Math.round(rgb[0]);
+      const g = Math.round(rgb[1]);
+      const b = Math.round(rgb[2]);
 
-      // Liens entre particules proches
+      // --- 1. Position de la lumière -------------------------------------
+      // Fondu d'apparition / disparition
+      const target = mouse.active ? 1 : 0;
+      light.intensity += (target - light.intensity) * 0.08;
+
+      // Suivi de la souris avec un léger retard (uniquement quand active,
+      // pour que la lumière s'éteigne sur place au lieu de filer au coin)
+      if (mouse.active) {
+        if (light.baseX < -1000) {
+          light.baseX = mouse.x;
+          light.baseY = mouse.y;
+        }
+        light.baseX = p.lerp(light.baseX, mouse.x, 0.18);
+        light.baseY = p.lerp(light.baseY, mouse.y, 0.18);
+      }
+
+      // Décalage vers les particules proches : c'est ce qui fait "bouger"
+      // la lumière quand elle interagit avec le réseau.
+      let ax = 0;
+      let ay = 0;
+      let near = 0;
+      for (const a of particles) {
+        const d = p.dist(a.x, a.y, light.baseX, light.baseY);
+        if (d < MOUSE_DIST) {
+          const w = 1 - d / MOUSE_DIST;
+          ax += (a.x - light.baseX) * w;
+          ay += (a.y - light.baseY) * w;
+          near++;
+        }
+      }
+      if (near > 0) {
+        ax /= near;
+        ay /= near;
+      }
+      let ox = ax * 0.35;
+      let oy = ay * 0.35;
+      const olen = Math.hypot(ox, oy);
+      const maxPull = 16; // décalage max en pixels
+      if (olen > maxPull) {
+        ox = (ox / olen) * maxPull;
+        oy = (oy / olen) * maxPull;
+      }
+      light.x = light.baseX + ox;
+      light.y = light.baseY + oy;
+
+      const lit = light.intensity > 0.02;
+
+      // --- 2. Halo diffus (derrière le réseau) ---------------------------
+      if (lit) {
+        const pulse = 1 + 0.09 * Math.sin(p.frameCount * 0.06);
+        const R = 46 * pulse;
+        p.noStroke();
+        for (let k = 5; k >= 1; k--) {
+          p.fill(r, g, b, 9 * light.intensity); // s'empile => centre plus clair
+          p.circle(light.x, light.y, R * (k / 5) * 2);
+        }
+      }
+
+      // --- 3. Liens entre particules proches -----------------------------
       for (let i = 0; i < particles.length; i++) {
         const a = particles[i];
 
@@ -86,24 +150,38 @@
             p.line(a.x, a.y, c2.x, c2.y);
           }
         }
+      }
 
-        // Lien discret vers le curseur
-        if (mouse.active) {
-          const dm = p.dist(a.x, a.y, mouse.x, mouse.y);
+      // --- 4. Liens du réseau vers la lumière ----------------------------
+      if (lit) {
+        for (const a of particles) {
+          const dm = p.dist(a.x, a.y, light.x, light.y);
           if (dm < MOUSE_DIST) {
-            const alpha = p.map(dm, 0, MOUSE_DIST, 60, 0);
+            const alpha = p.map(dm, 0, MOUSE_DIST, 70, 0) * light.intensity;
             p.stroke(r, g, b, alpha);
             p.strokeWeight(1);
-            p.line(a.x, a.y, mouse.x, mouse.y);
+            p.line(a.x, a.y, light.x, light.y);
           }
         }
       }
 
-      // Points par-dessus les liens
+      // --- 5. Points du réseau -------------------------------------------
       p.noStroke();
       for (const a of particles) {
         p.fill(r, g, b, 78);
         p.circle(a.x, a.y, a.r * 2);
+      }
+
+      // --- 6. Cœur lumineux net (par-dessus tout) ------------------------
+      if (lit) {
+        const ctx = p.drawingContext;
+        ctx.save();
+        ctx.shadowBlur = 22 * light.intensity;
+        ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${0.7 * light.intensity})`;
+        p.noStroke();
+        p.fill(r, g, b, 200 * light.intensity);
+        p.circle(light.x, light.y, 7);
+        ctx.restore();
       }
     };
 
